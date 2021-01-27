@@ -49,6 +49,10 @@ type OutgoingBatch struct {
 	readValuePosition int
 }
 
+func (ob OutgoingBatch) String() string {
+	return fmt.Sprintf("Batch %s - %s", ob.BatchID, ob.Values)
+}
+
 func (ob *OutgoingBatch) Read(p []byte) (int, error) {
 	currentLength := 0
 	for {
