@@ -195,10 +195,10 @@ func TestSendBatch(t *testing.T) {
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
-	inMemoryBatchesAvailable := make(chan bool)
+	inMemoryBatchesAvailable := make(chan struct{})
 	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
-	inMemoryBatchesAvailable <- true
+	inMemoryBatchesAvailable <- struct{}{}
 	fmt.Println("Waiting for batch to be sent")
 	<-sentBatches
 	// Batch was "sent" but there is still a race between marking it as sent and executing the check.
@@ -220,10 +220,10 @@ func TestSendBatchFailingSend(t *testing.T) {
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches, Fail: true}}
-	inMemoryBatchesAvailable := make(chan bool)
+	inMemoryBatchesAvailable := make(chan struct{})
 	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
-	inMemoryBatchesAvailable <- true
+	inMemoryBatchesAvailable <- struct{}{}
 	<-sentBatches
 	// Batch was "sent" but there is still a race between marking it as sent and executing the check.
 	for i := 0; i < 10; i++ {
@@ -239,9 +239,9 @@ func TestSendBatchNoItems(t *testing.T) {
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
-	inMemoryBatchesAvailable := make(chan bool)
+	inMemoryBatchesAvailable := make(chan struct{})
 	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
-	inMemoryBatchesAvailable <- true
+	inMemoryBatchesAvailable <- struct{}{}
 }
 
 func TestFileBackendFilenames(t *testing.T) {

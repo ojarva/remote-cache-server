@@ -483,7 +483,7 @@ func BackoffService(maxWaitTime time.Duration) func(success bool) time.Duration 
 	}
 }
 
-func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan bool, remoteServerSettings RemoteServerSettings) {
+func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan struct{}, remoteServerSettings RemoteServerSettings) {
 	var status bool
 	backoffUntil := time.Now()
 	backoff := BackoffService(remoteServerSettings.MaxBackoffTime)
@@ -517,7 +517,7 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan b
 	}
 }
 
-func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBatches, fileCacheBackend *FileCacheBackend, inMemoryBatchesAvailable chan bool, quitChannel chan struct{}) {
+func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBatches, fileCacheBackend *FileCacheBackend, inMemoryBatchesAvailable chan struct{}, quitChannel chan struct{}) {
 	var diskHasItems bool
 	var err error
 	var lastCachedFileCheck time.Time
@@ -538,7 +538,7 @@ func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBa
 			if !diskHasItems {
 				err = inMemoryBatches.Queue(item)
 				if err == nil {
-					inMemoryBatchesAvailable <- true
+					inMemoryBatchesAvailable <- struct{}{}
 				}
 			}
 			if err != nil || diskHasItems {
@@ -569,7 +569,7 @@ func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBa
 					if err == nil {
 						// Added to in-memory queue -> remove from disk
 						fileCacheBackend.DeleteCacheItem(filename)
-						inMemoryBatchesAvailable <- true
+						inMemoryBatchesAvailable <- struct{}{}
 						lastIterationFoundFile = true
 					}
 				}
@@ -661,7 +661,7 @@ func main() {
 	var wg sync.WaitGroup
 	incomingChannel := make(chan string, 100)
 	batchChannel := make(chan OutgoingBatch, 100)
-	inMemoryBatchesAvailable := make(chan bool, *inMemoryBatchCountFlag+5)
+	inMemoryBatchesAvailable := make(chan struct{}, *inMemoryBatchCountFlag+5)
 	var inMemoryBatches InMemoryBatches
 	var sender Sender
 	switch *protocolFlag {
