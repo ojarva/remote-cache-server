@@ -221,6 +221,7 @@ func (ob *OutgoingBatch) Seek(offset int64, whence int) (int64, error) {
 
 // InMemoryBatches holds in-memory cache of a small number of batches to be sent out. All functions are thread-safe.
 type InMemoryBatches struct {
+	SlotFreedUp     chan struct{}
 	values          []OutgoingBatch
 	writeMutex      sync.Mutex
 	inflightSegment bool
@@ -250,6 +251,7 @@ func (imb *InMemoryBatches) Dequeue() (OutgoingBatch, error) {
 	}
 	returnValue := imb.values[0]
 	imb.values = imb.values[1:]
+	imb.SlotFreedUp <- struct{}{}
 	return returnValue, nil
 }
 
@@ -285,6 +287,7 @@ func (imb *InMemoryBatches) InflightDone(success bool) error {
 		panic("InflightDone trying to dequeue from empty queue. This should never happen")
 	}
 	imb.values = imb.values[1:]
+	imb.SlotFreedUp <- struct{}{}
 	return nil
 }
 
@@ -437,6 +440,8 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 			*localItems = make([]string, 0, batchSize)
 		}
 	}
+	ticker := time.NewTicker(maximumBatchWaitTime)
+	defer ticker.Stop()
 	for {
 		select {
 		case item = <-incomingChannel:
@@ -449,7 +454,7 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 			log.Print("Quit received; stopped batching incoming datapoints")
 			wg.Done()
 			return
-		case <-time.Tick(maximumBatchWaitTime):
+		case <-ticker.C:
 			createBatch(&localItems)
 		}
 	}
@@ -500,10 +505,12 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 	var status bool
 	backoffUntil := time.Now()
 	backoff := BackoffService(remoteServerSettings.MaxBackoffTime)
+	ticker := time.NewTicker(10000 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-inMemoryBatchesAvailable:
-		case <-time.Tick(100 * time.Millisecond):
+		case <-ticker.C:
 		}
 		if backoffUntil.After(time.Now()) {
 			// We don't stop the loop with wait in order to avoid blocking inMemoryBatchesAvailable channel
@@ -511,6 +518,9 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 		}
 		batch, err := inMemoryBatches.GetInflight()
 		if err != nil {
+			if err.Error() == "Nothing to dequeue" {
+				continue
+			}
 			log.Printf("Unable to get a batch from in memory store: %s", err)
 			continue
 		}
@@ -533,9 +543,32 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBatches, fileCacheBackend *FileCacheBackend, inMemoryBatchesAvailable chan struct{}, quitChannel chan struct{}) {
 	var diskHasItems bool
 	var err error
-	var lastCachedFileCheck time.Time
-	var lastIterationFoundFile bool
 	quitTime := false
+	slotFreedUp := func() {
+		if quitTime {
+			return
+		}
+		filename, err := fileCacheBackend.GetOldestIdentifier()
+		if err == nil {
+			diskHasItems = true
+			// We have something in file cache -> we need to push that to in memory queue.
+			contents, err := fileCacheBackend.GetCachedContent(filename)
+			if err == nil {
+				batchID := getBatchID()
+				err = inMemoryBatches.Queue(OutgoingBatch{BatchID: batchID, Values: contents})
+				if err == nil {
+					// Added to in-memory queue -> remove from disk
+					fileCacheBackend.DeleteCacheItem(filename)
+					inMemoryBatchesAvailable <- struct{}{}
+				}
+			}
+		} else {
+			diskHasItems = false
+		}
+
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-quitChannel:
@@ -561,34 +594,10 @@ func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBa
 					log.Printf("In memory queue is full but saving to disk failed with %s", err)
 				}
 			}
-		case <-time.Tick(10 * time.Millisecond):
-			if quitTime {
-				continue
-			}
-			timeSinceLastCheck := time.Now().Sub(lastCachedFileCheck)
-			if timeSinceLastCheck < 1*time.Second && !lastIterationFoundFile {
-				continue
-			}
-			lastCachedFileCheck = time.Now()
-			lastIterationFoundFile = false
-			filename, err := fileCacheBackend.GetOldestIdentifier()
-			if err == nil {
-				diskHasItems = true
-				// We have something in file cache -> we need to push that to in memory queue.
-				contents, err := fileCacheBackend.GetCachedContent(filename)
-				if err == nil {
-					batchID := getBatchID()
-					err = inMemoryBatches.Queue(OutgoingBatch{BatchID: batchID, Values: contents})
-					if err == nil {
-						// Added to in-memory queue -> remove from disk
-						fileCacheBackend.DeleteCacheItem(filename)
-						inMemoryBatchesAvailable <- struct{}{}
-						lastIterationFoundFile = true
-					}
-				}
-			} else {
-				diskHasItems = false
-			}
+		case <-inMemoryBatches.SlotFreedUp:
+			slotFreedUp()
+		case <-ticker.C:
+			slotFreedUp()
 		}
 	}
 }
@@ -689,7 +698,8 @@ func main() {
 	incomingChannel := make(chan string, 100)
 	batchChannel := make(chan OutgoingBatch, 100)
 	inMemoryBatchesAvailable := make(chan struct{}, *inMemoryBatchCountFlag+5)
-	var inMemoryBatches InMemoryBatches
+	inMemorySlotAvailable := make(chan struct{}, 100)
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: inMemorySlotAvailable}
 	var sender Sender
 	switch *protocolFlag {
 	case "https":
