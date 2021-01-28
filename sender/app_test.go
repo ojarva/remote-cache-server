@@ -385,3 +385,21 @@ func TestBackoffService(t *testing.T) {
 		t.Errorf("Invalid wait time after successful request: %s", waitTime)
 	}
 }
+
+func ExampleInMemoryBatches() {
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: make(chan struct{}, 100)}
+	inMemoryBatches.SetBatchCount(2)
+	inMemoryBatches.Queue(OutgoingBatch{BatchID: "batch1"})
+	inMemoryBatches.Queue(OutgoingBatch{BatchID: "batch2"})
+	err := inMemoryBatches.Queue(OutgoingBatch{BatchID: "batch3"})
+	if err != nil {
+		fmt.Println(err)
+	}
+	item, err := inMemoryBatches.Dequeue()
+	if err != nil {
+		panic(fmt.Sprintf("Unable to dequeue: %s", err))
+	}
+	fmt.Println(item.BatchID)
+	// Output: Unable to queue, too many items
+	// batch1
+}
