@@ -172,20 +172,34 @@ func TestBatchIncomingDataPoints(t *testing.T) {
 	}
 }
 
+type FakeSender struct {
+	SentBatches chan OutgoingBatch
+	Fail        bool
+}
+
+func (fs *FakeSender) Init() error {
+	return nil
+}
+
+func (fs *FakeSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	fmt.Printf("Sending %s to %s", batch, remoteServerSettings)
+	fs.SentBatches <- batch
+	if fs.Fail {
+		return errors.New("Failed to send")
+	}
+	return nil
+}
+
 func TestSendBatch(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return nil
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
+	inMemoryBatchesAvailable := make(chan bool)
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
 	inMemoryBatchesAvailable <- true
+	fmt.Println("Waiting for batch to be sent")
 	<-sentBatches
 	// Batch was "sent" but there is still a race between marking it as sent and executing the check.
 	batchEmpty := false
@@ -204,15 +218,10 @@ func TestSendBatch(t *testing.T) {
 func TestSendBatchFailingSend(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return errors.New("Unable to send")
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches, Fail: true}}
+	inMemoryBatchesAvailable := make(chan bool)
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
 	inMemoryBatchesAvailable <- true
 	<-sentBatches
@@ -228,15 +237,10 @@ func TestSendBatchFailingSend(t *testing.T) {
 func TestSendBatchNoItems(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return errors.New("Unable to send")
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
+	inMemoryBatchesAvailable := make(chan bool)
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatchesAvailable <- true
 }
 

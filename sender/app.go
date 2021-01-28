@@ -22,13 +22,94 @@ import (
 	"github.com/google/uuid"
 )
 
+type Sender interface {
+	Send(RemoteServerSettings, OutgoingBatch) error
+	Init() error
+}
+type HttpSender struct {
+}
+
+func (hs *HttpSender) Init() error {
+	return nil
+}
+
+func (hs *HttpSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	var url string
+	if remoteServerSettings.Protocol == "https" {
+		url = remoteServerSettings.GenerateHTTPSURL()
+	} else if remoteServerSettings.Protocol == "http" {
+		url = remoteServerSettings.GenerateHTTPURL()
+	} else {
+		panic(fmt.Sprintf("Invalid protocol for httpSender: %s", remoteServerSettings.Protocol))
+	}
+	batch.Seek(0, io.SeekStart)
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", url, &batch)
+	if err != nil {
+		log.Printf("POST request to %s failed with %s", url, err)
+		return err
+	}
+	if remoteServerSettings.Username != "" || remoteServerSettings.Password != "" {
+		req.SetBasicAuth(remoteServerSettings.Username, remoteServerSettings.Password)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("POST request to %s failed with %s", url, err)
+		return err
+	}
+	if resp.StatusCode > 299 {
+		log.Printf("POST returned >299: %d. Ignoring.", resp.StatusCode)
+	} else {
+		log.Printf("Successfully sent %d datapoints to %s", len(batch.Values), url)
+	}
+	return nil
+}
+
+type TcpSender struct {
+	conn *net.TCPConn
+}
+
+func (ts *TcpSender) Init() error {
+	return nil
+}
+
+func (ts *TcpSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	if ts.conn == nil {
+		// We don't have a connection, try opening one
+		hostPort := remoteServerSettings.GenerateTCP()
+		addr, err := net.ResolveTCPAddr("tcp", hostPort)
+		if err != nil {
+			return fmt.Errorf("Unable to resolve %s: %s", hostPort, err)
+		}
+		conn, err := net.DialTCP("tcp", nil, addr)
+		if err != nil {
+			return fmt.Errorf("Unable to open TCP connection: %s: %s", hostPort, err)
+		}
+		(*ts).conn = conn
+	}
+	_, err := ts.conn.Write([]byte(strings.Join(batch.Values, "\n")))
+	if err != nil {
+		ts.conn.Close()
+		ts.conn = nil
+		return fmt.Errorf("Unable to send data: %s. Closing connection", err)
+	}
+	return nil
+}
+
 // RemoteServerSettings holds details for a remote server
 type RemoteServerSettings struct {
-	Hostname string
-	Port     int
-	Path     string
-	Username string
-	Password string
+	Protocol       string
+	Hostname       string
+	Port           int
+	Path           string
+	Username       string
+	Password       string
+	MaxBackoffTime time.Duration
+	Sender         Sender
+}
+
+func (rss RemoteServerSettings) Send(batch OutgoingBatch) error {
+	return rss.Sender.Send(rss, batch)
 }
 
 // String returns a safe string representation without a password
@@ -36,9 +117,18 @@ func (rss RemoteServerSettings) String() string {
 	return fmt.Sprintf("%s:%d/%s - %s", rss.Hostname, rss.Port, rss.Path, rss.Username)
 }
 
-// GenerateURL returns URL to the endpoint
-func (rss RemoteServerSettings) GenerateURL() string {
+// GenerateHTTPURL returns URL to the endpoint
+func (rss RemoteServerSettings) GenerateHTTPURL() string {
 	return fmt.Sprintf("http://%s:%d/%s", rss.Hostname, rss.Port, rss.Path)
+}
+
+// GenerateHTTPSURL returns URL to the endpoint
+func (rss RemoteServerSettings) GenerateHTTPSURL() string {
+	return fmt.Sprintf("https://%s:%d/%s", rss.Hostname, rss.Port, rss.Path)
+}
+
+func (rss RemoteServerSettings) GenerateTCP() string {
+	return fmt.Sprintf("%s:%d", rss.Hostname, rss.Port)
 }
 
 // OutgoingBatch represents a single batch of values that is sent at once.
@@ -373,7 +463,7 @@ func flushInMemoryToDisk(inMemoryBatches *InMemoryBatches, quitChannel chan stru
 	}
 }
 
-func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan bool, remoteServerSettings RemoteServerSettings, sender func(RemoteServerSettings, OutgoingBatch) error) {
+func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan bool, remoteServerSettings RemoteServerSettings) {
 	var status bool
 	for {
 		select {
@@ -385,7 +475,7 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan b
 			log.Printf("Unable to get a batch from in memory store: %s", err)
 			continue
 		}
-		err = sender(remoteServerSettings, batch)
+		err = remoteServerSettings.Send(batch)
 		if err == nil {
 			status = true
 		} else {
@@ -511,30 +601,15 @@ func listenIncoming(port int, incomingChannel chan string, wg *sync.WaitGroup, q
 	}
 }
 
-func httpSender(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
-	url := remoteServerSettings.GenerateURL()
-	batch.Seek(0, io.SeekStart)
-	resp, err := http.Post(url, "text/plain", &batch)
-	if err != nil {
-		log.Printf("POST request to %s failed with %s", url, err)
-		return err
-	}
-	if resp.StatusCode > 299 {
-		log.Printf("POST returned >299: %d. Ignoring.", resp.StatusCode)
-	} else {
-		log.Printf("Successfully sent %d datapoints to %s", len(batch.Values), url)
-	}
-	return nil
-}
-
 func main() {
+	protocolFlag := flag.String("protocol", "https", "Protocol")
 	remoteServerFlag := flag.String("server", "localhost", "Server address")
 	remotePortFlag := flag.Int("port", 8080, "Remote port")
 	batchSizeFlag := flag.Int("batch-size", 50, "Number of entries to store in a single batch")
 	inMemoryBatchCountFlag := flag.Int("in-memory-batch-count", 50, "Number of batches to keep in memory")
 	usernameFlag := flag.String("username", "", "Username for the server. Leave empty for no authentication")
 	passwordFlag := flag.String("password", "", "Password for the server. Leave empty for no authentication")
-	pathFlag := flag.String("remote-path", "/", "Path on the remote server; including any query parameters")
+	pathFlag := flag.String("remote-path", "", "Path on the remote server; including any query parameters")
 	localDirFlag := flag.String("local-cache-dir", "cache-dir", "Local cache dir for entries that were not sent yet")
 	localPortFlag := flag.Int("local-port", 6065, "Port to listen on on localhost")
 	maximumBatchWaitTimeFlag := flag.String("maximum-batch-wait-time", "10s", "Maximum time to wait for a batch to fill")
@@ -560,12 +635,28 @@ func main() {
 	batchChannel := make(chan OutgoingBatch, 100)
 	inMemoryBatchesAvailable := make(chan bool, *inMemoryBatchCountFlag+5)
 	var inMemoryBatches InMemoryBatches
+	var sender Sender
+	switch *protocolFlag {
+	case "https":
+		sender = &HttpSender{}
+	case "http":
+		sender = &HttpSender{}
+	case "tcp":
+		sender = &TcpSender{}
+		if *pathFlag != "" {
+			log.Fatal("path is not a valid argument for protocol TCP")
+		}
+	default:
+		log.Fatalf("Invalid protocol: %s", *protocolFlag)
+	}
 	remoteServerSettings := RemoteServerSettings{
-		Hostname: *remoteServerFlag,
-		Port:     *remotePortFlag,
-		Username: *usernameFlag,
-		Password: *passwordFlag,
-		Path:     *pathFlag,
+		Protocol:       *protocolFlag,
+		Hostname:       *remoteServerFlag,
+		Port:           *remotePortFlag,
+		Username:       *usernameFlag,
+		Password:       *passwordFlag,
+		Path:           *pathFlag,
+		Sender:         sender,
 	}
 	fileCacheBackend := &FileCacheBackend{CacheDir: *localDirFlag}
 	err = fileCacheBackend.Init()
@@ -579,7 +670,7 @@ func main() {
 	go listenIncoming(*localPortFlag, incomingChannel, &wg, quitChannel)
 	wg.Add(1)
 	go batchIncomingDataPoints(incomingChannel, batchChannel, *batchSizeFlag, quitChannel, maximumBatchWaitTime, &wg)
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, httpSender)
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	go batchProcessor(batchChannel, &inMemoryBatches, fileCacheBackend, inMemoryBatchesAvailable, quitChannel)
 	wg.Wait()
 }
