@@ -29,6 +29,17 @@ type Sender interface {
 	Send(RemoteServerSettings, OutgoingBatch) error
 	Init() error
 }
+
+type DummySender struct{}
+
+func (ds *DummySender) Init() error {
+	return nil
+}
+
+func (ds *DummySender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	return nil
+}
+
 type HttpSender struct {
 }
 
@@ -690,6 +701,8 @@ func main() {
 		if *pathFlag != "" {
 			log.Fatal("path is not a valid argument for protocol TCP")
 		}
+	case "dummy":
+		sender = &DummySender{}
 	default:
 		log.Fatalf("Invalid protocol: %s", *protocolFlag)
 	}
