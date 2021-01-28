@@ -415,7 +415,9 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 	createBatch := func(localItems *[]string) {
 		if len(*localItems) > 0 {
 			batchID := getBatchID()
-			outgoingSlice := make([]string, len(*localItems))
+			itemCount := len(*localItems)
+			log.Printf("Creating a new batch %s with %d items", batchID, itemCount)
+			outgoingSlice := make([]string, itemCount)
 			copy(outgoingSlice, *localItems)
 			outgoingChannel <- OutgoingBatch{BatchID: batchID, Values: outgoingSlice}
 			*localItems = nil
@@ -425,7 +427,6 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 		select {
 		case item = <-incomingChannel:
 			if len(localItems) >= batchSize {
-				log.Printf("Creating a new batch %s", localItems)
 				createBatch(&localItems)
 			}
 			localItems = append(localItems, item)
@@ -540,7 +541,6 @@ func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBa
 					err = inMemoryBatches.Queue(OutgoingBatch{BatchID: batchID, Values: contents})
 					if err == nil {
 						// Added to in-memory queue -> remove from disk
-						log.Printf("Load from disk: %s", contents)
 						fileCacheBackend.DeleteCacheItem(filename)
 						inMemoryBatchesAvailable <- true
 						lastIterationFoundFile = true
