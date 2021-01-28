@@ -660,6 +660,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid maximum-batch-wait-time: %s", err)
 	}
+	if maximumBatchWaitTime < time.Second {
+		log.Fatalf("-maximum-batch-wait-time must be at least 1s")
+	}
 
 	quitChannel := make(chan struct{})
 	osSignalChannel := make(chan os.Signal, 1)
