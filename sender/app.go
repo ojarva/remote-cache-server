@@ -434,7 +434,7 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 			outgoingSlice := make([]string, itemCount)
 			copy(outgoingSlice, *localItems)
 			outgoingChannel <- OutgoingBatch{BatchID: batchID, Values: outgoingSlice}
-			*localItems = nil
+			*localItems = make([]string, 0, batchSize)
 		}
 	}
 	for {
