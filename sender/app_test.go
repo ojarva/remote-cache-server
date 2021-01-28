@@ -172,20 +172,34 @@ func TestBatchIncomingDataPoints(t *testing.T) {
 	}
 }
 
+type FakeSender struct {
+	SentBatches chan OutgoingBatch
+	Fail        bool
+}
+
+func (fs *FakeSender) Init() error {
+	return nil
+}
+
+func (fs *FakeSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	fmt.Printf("Sending %s to %s", batch, remoteServerSettings)
+	fs.SentBatches <- batch
+	if fs.Fail {
+		return errors.New("Failed to send")
+	}
+	return nil
+}
+
 func TestSendBatch(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return nil
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
+	inMemoryBatchesAvailable := make(chan struct{})
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
-	inMemoryBatchesAvailable <- true
+	inMemoryBatchesAvailable <- struct{}{}
+	fmt.Println("Waiting for batch to be sent")
 	<-sentBatches
 	// Batch was "sent" but there is still a race between marking it as sent and executing the check.
 	batchEmpty := false
@@ -204,17 +218,12 @@ func TestSendBatch(t *testing.T) {
 func TestSendBatchFailingSend(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return errors.New("Unable to send")
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches, Fail: true}}
+	inMemoryBatchesAvailable := make(chan struct{})
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	inMemoryBatches.Queue(OutgoingBatch{BatchID: getBatchID()})
-	inMemoryBatchesAvailable <- true
+	inMemoryBatchesAvailable <- struct{}{}
 	<-sentBatches
 	// Batch was "sent" but there is still a race between marking it as sent and executing the check.
 	for i := 0; i < 10; i++ {
@@ -228,16 +237,11 @@ func TestSendBatchFailingSend(t *testing.T) {
 func TestSendBatchNoItems(t *testing.T) {
 	inMemoryBatches := InMemoryBatches{}
 	inMemoryBatches.SetBatchCount(5)
-	remoteServerSettings := RemoteServerSettings{Hostname: "testhost"}
-	inMemoryBatchesAvailable := make(chan bool)
 	sentBatches := make(chan OutgoingBatch, 1)
-	sender := func(rss RemoteServerSettings, ob OutgoingBatch) error {
-		fmt.Printf("Sending %s to %s", ob, rss)
-		sentBatches <- ob
-		return errors.New("Unable to send")
-	}
-	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings, sender)
-	inMemoryBatchesAvailable <- true
+	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
+	inMemoryBatchesAvailable := make(chan struct{})
+	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
+	inMemoryBatchesAvailable <- struct{}{}
 }
 
 func TestFileBackendFilenames(t *testing.T) {
@@ -344,5 +348,34 @@ func TestFileBackendOps(t *testing.T) {
 	content, err = fcb.GetCachedContent(oldestFile)
 	if err == nil {
 		t.Error("GetCachedContent did not fail")
+	}
+}
+
+func TestBackoffService(t *testing.T) {
+	bof := BackoffService(10 * time.Second)
+	var waitTime time.Duration
+	waitTime = bof(true)
+	if waitTime != 0*time.Second {
+		t.Errorf("Invalid wait time for successful request: %s", waitTime)
+	}
+	waitTime = bof(false)
+	if waitTime != 2*time.Second {
+		t.Errorf("Invalid wait time after failed request: %s", waitTime)
+	}
+	waitTime = bof(false)
+	if waitTime != 4*time.Second {
+		t.Errorf("Invalid wait time after failed request: %s", waitTime)
+	}
+	waitTime = bof(false)
+	if waitTime != 8*time.Second {
+		t.Errorf("Invalid wait time after failed request: %s", waitTime)
+	}
+	waitTime = bof(false)
+	if waitTime != 10*time.Second {
+		t.Errorf("Invalid wait time after failed request: %s", waitTime)
+	}
+	waitTime = bof(true)
+	if waitTime != 0*time.Second {
+		t.Errorf("Invalid wait time after successful request: %s", waitTime)
 	}
 }
