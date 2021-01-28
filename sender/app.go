@@ -25,36 +25,43 @@ import (
 	"github.com/google/uuid"
 )
 
+// Sender defines an interface for a component used to send data forward
 type Sender interface {
 	Send(RemoteServerSettings, OutgoingBatch) error
 	Init() error
 }
 
+// DummySender discards all incoming data without a delay and never fails.
 type DummySender struct{}
 
+// Init initializes the sender
 func (ds *DummySender) Init() error {
 	return nil
 }
 
+// Send sends the data to remote server
 func (ds *DummySender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
 	return nil
 }
 
-type HttpSender struct {
+// HTTPSender sends data over HTTP or HTTPS, depending on the protocol
+type HTTPSender struct {
 }
 
-func (hs *HttpSender) Init() error {
+// Init initializes the sender
+func (hs *HTTPSender) Init() error {
 	return nil
 }
 
-func (hs *HttpSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+// Send sends the data to remote server
+func (hs *HTTPSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
 	var url string
 	if remoteServerSettings.Protocol == "https" {
 		url = remoteServerSettings.GenerateHTTPSURL()
 	} else if remoteServerSettings.Protocol == "http" {
 		url = remoteServerSettings.GenerateHTTPURL()
 	} else {
-		panic(fmt.Sprintf("Invalid protocol for httpSender: %s", remoteServerSettings.Protocol))
+		panic(fmt.Sprintf("Invalid protocol for HTTPSender: %s", remoteServerSettings.Protocol))
 	}
 	batch.Seek(0, io.SeekStart)
 	client := &http.Client{}
@@ -79,15 +86,18 @@ func (hs *HttpSender) Send(remoteServerSettings RemoteServerSettings, batch Outg
 	return nil
 }
 
-type TcpSender struct {
+// TCPSender sends the data to a TCP socket
+type TCPSender struct {
 	conn *net.TCPConn
 }
 
-func (ts *TcpSender) Init() error {
+// Init initializes the sender
+func (ts *TCPSender) Init() error {
 	return nil
 }
 
-func (ts *TcpSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+// Send sends the data to remote server
+func (ts *TCPSender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
 	if ts.conn == nil {
 		// We don't have a connection, try opening one
 		hostPort := remoteServerSettings.GenerateTCP()
@@ -122,6 +132,7 @@ type RemoteServerSettings struct {
 	Sender         Sender
 }
 
+// Send sends the data to remote server
 func (rss RemoteServerSettings) Send(batch OutgoingBatch) error {
 	return rss.Sender.Send(rss, batch)
 }
@@ -141,6 +152,7 @@ func (rss RemoteServerSettings) GenerateHTTPSURL() string {
 	return fmt.Sprintf("https://%s:%d/%s", rss.Hostname, rss.Port, rss.Path)
 }
 
+// GenerateTCP generates connection string for TCP
 func (rss RemoteServerSettings) GenerateTCP() string {
 	return fmt.Sprintf("%s:%d", rss.Hostname, rss.Port)
 }
@@ -703,11 +715,11 @@ func main() {
 	var sender Sender
 	switch *protocolFlag {
 	case "https":
-		sender = &HttpSender{}
+		sender = &HTTPSender{}
 	case "http":
-		sender = &HttpSender{}
+		sender = &HTTPSender{}
 	case "tcp":
-		sender = &TcpSender{}
+		sender = &TCPSender{}
 		if *pathFlag != "" {
 			log.Fatal("path is not a valid argument for protocol TCP")
 		}
