@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -464,12 +465,36 @@ func flushInMemoryToDisk(inMemoryBatches *InMemoryBatches, quitChannel chan stru
 	}
 }
 
+// BackoffService provides a simple exponential backoff.
+func BackoffService(maxWaitTime time.Duration) func(success bool) time.Duration {
+	var failureCount int
+	return func(success bool) time.Duration {
+		if success {
+			// We succeeded on the last iteration; it's ok to retry immediately.
+			failureCount = 0
+			return 0 * time.Second
+		}
+		failureCount++
+		waitTime, _ := time.ParseDuration(fmt.Sprintf("%.0fs", math.Pow(2, float64(failureCount))))
+		if waitTime > maxWaitTime {
+			return maxWaitTime
+		}
+		return waitTime
+	}
+}
+
 func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan bool, remoteServerSettings RemoteServerSettings) {
 	var status bool
+	backoffUntil := time.Now()
+	backoff := BackoffService(remoteServerSettings.MaxBackoffTime)
 	for {
 		select {
 		case <-inMemoryBatchesAvailable:
-		case <-time.Tick(10 * time.Second):
+		case <-time.Tick(100 * time.Millisecond):
+		}
+		if backoffUntil.After(time.Now()) {
+			// We don't stop the loop with wait in order to avoid blocking inMemoryBatchesAvailable channel
+			continue
 		}
 		batch, err := inMemoryBatches.GetInflight()
 		if err != nil {
@@ -483,6 +508,8 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan b
 			log.Printf("Sending batch %s failed with %s", batch.BatchID, err)
 			status = false
 		}
+		backoffDuration := backoff(status)
+		backoffUntil = time.Now().Add(backoffDuration)
 		err = inMemoryBatches.InflightDone(status)
 		if err != nil {
 			log.Printf("Unable to dequeue batch: %s", err)
@@ -613,6 +640,7 @@ func main() {
 	localDirFlag := flag.String("local-cache-dir", "cache-dir", "Local cache dir for entries that were not sent yet")
 	localPortFlag := flag.Int("local-port", 6065, "Port to listen on on localhost")
 	maximumBatchWaitTimeFlag := flag.String("maximum-batch-wait-time", "10s", "Maximum time to wait for a batch to fill")
+	maxBackoffTimeFlag := flag.String("maximum-backoff-time", "60s", "Maximum backoff time on connection errors")
 	flag.Parse()
 
 	maximumBatchWaitTime, err := time.ParseDuration(*maximumBatchWaitTimeFlag)
@@ -649,6 +677,13 @@ func main() {
 	default:
 		log.Fatalf("Invalid protocol: %s", *protocolFlag)
 	}
+	maxBackoffTime, err := time.ParseDuration(*maxBackoffTimeFlag)
+	if err != nil {
+		log.Fatalf("Invalid max backoff time: %s", err)
+	}
+	if maxBackoffTime < 0*time.Second {
+		log.Fatalf("Maximum backoff time must be >0")
+	}
 	remoteServerSettings := RemoteServerSettings{
 		Protocol:       *protocolFlag,
 		Hostname:       *remoteServerFlag,
@@ -656,6 +691,7 @@ func main() {
 		Username:       *usernameFlag,
 		Password:       *passwordFlag,
 		Path:           *pathFlag,
+		MaxBackoffTime: maxBackoffTime,
 		Sender:         sender,
 	}
 	fileCacheBackend := &FileCacheBackend{CacheDir: *localDirFlag}
