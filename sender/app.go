@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +29,17 @@ type Sender interface {
 	Send(RemoteServerSettings, OutgoingBatch) error
 	Init() error
 }
+
+type DummySender struct{}
+
+func (ds *DummySender) Init() error {
+	return nil
+}
+
+func (ds *DummySender) Send(remoteServerSettings RemoteServerSettings, batch OutgoingBatch) error {
+	return nil
+}
+
 type HttpSender struct {
 }
 
@@ -208,6 +221,7 @@ func (ob *OutgoingBatch) Seek(offset int64, whence int) (int64, error) {
 
 // InMemoryBatches holds in-memory cache of a small number of batches to be sent out. All functions are thread-safe.
 type InMemoryBatches struct {
+	SlotFreedUp     chan struct{}
 	values          []OutgoingBatch
 	writeMutex      sync.Mutex
 	inflightSegment bool
@@ -237,6 +251,7 @@ func (imb *InMemoryBatches) Dequeue() (OutgoingBatch, error) {
 	}
 	returnValue := imb.values[0]
 	imb.values = imb.values[1:]
+	imb.SlotFreedUp <- struct{}{}
 	return returnValue, nil
 }
 
@@ -272,6 +287,7 @@ func (imb *InMemoryBatches) InflightDone(success bool) error {
 		panic("InflightDone trying to dequeue from empty queue. This should never happen")
 	}
 	imb.values = imb.values[1:]
+	imb.SlotFreedUp <- struct{}{}
 	return nil
 }
 
@@ -421,9 +437,11 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 			outgoingSlice := make([]string, itemCount)
 			copy(outgoingSlice, *localItems)
 			outgoingChannel <- OutgoingBatch{BatchID: batchID, Values: outgoingSlice}
-			*localItems = nil
+			*localItems = make([]string, 0, batchSize)
 		}
 	}
+	ticker := time.NewTicker(maximumBatchWaitTime)
+	defer ticker.Stop()
 	for {
 		select {
 		case item = <-incomingChannel:
@@ -436,7 +454,7 @@ func batchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan O
 			log.Print("Quit received; stopped batching incoming datapoints")
 			wg.Done()
 			return
-		case <-time.Tick(maximumBatchWaitTime):
+		case <-ticker.C:
 			createBatch(&localItems)
 		}
 	}
@@ -487,10 +505,12 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 	var status bool
 	backoffUntil := time.Now()
 	backoff := BackoffService(remoteServerSettings.MaxBackoffTime)
+	ticker := time.NewTicker(10000 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-inMemoryBatchesAvailable:
-		case <-time.Tick(100 * time.Millisecond):
+		case <-ticker.C:
 		}
 		if backoffUntil.After(time.Now()) {
 			// We don't stop the loop with wait in order to avoid blocking inMemoryBatchesAvailable channel
@@ -498,6 +518,9 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 		}
 		batch, err := inMemoryBatches.GetInflight()
 		if err != nil {
+			if err.Error() == "Nothing to dequeue" {
+				continue
+			}
 			log.Printf("Unable to get a batch from in memory store: %s", err)
 			continue
 		}
@@ -520,9 +543,32 @@ func sendBatch(inMemoryBatches *InMemoryBatches, inMemoryBatchesAvailable chan s
 func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBatches, fileCacheBackend *FileCacheBackend, inMemoryBatchesAvailable chan struct{}, quitChannel chan struct{}) {
 	var diskHasItems bool
 	var err error
-	var lastCachedFileCheck time.Time
-	var lastIterationFoundFile bool
 	quitTime := false
+	slotFreedUp := func() {
+		if quitTime {
+			return
+		}
+		filename, err := fileCacheBackend.GetOldestIdentifier()
+		if err == nil {
+			diskHasItems = true
+			// We have something in file cache -> we need to push that to in memory queue.
+			contents, err := fileCacheBackend.GetCachedContent(filename)
+			if err == nil {
+				batchID := getBatchID()
+				err = inMemoryBatches.Queue(OutgoingBatch{BatchID: batchID, Values: contents})
+				if err == nil {
+					// Added to in-memory queue -> remove from disk
+					fileCacheBackend.DeleteCacheItem(filename)
+					inMemoryBatchesAvailable <- struct{}{}
+				}
+			}
+		} else {
+			diskHasItems = false
+		}
+
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-quitChannel:
@@ -548,34 +594,10 @@ func batchProcessor(batchChannel chan OutgoingBatch, inMemoryBatches *InMemoryBa
 					log.Printf("In memory queue is full but saving to disk failed with %s", err)
 				}
 			}
-		case <-time.Tick(10 * time.Millisecond):
-			if quitTime {
-				continue
-			}
-			timeSinceLastCheck := time.Now().Sub(lastCachedFileCheck)
-			if timeSinceLastCheck < 1*time.Second && !lastIterationFoundFile {
-				continue
-			}
-			lastCachedFileCheck = time.Now()
-			lastIterationFoundFile = false
-			filename, err := fileCacheBackend.GetOldestIdentifier()
-			if err == nil {
-				diskHasItems = true
-				// We have something in file cache -> we need to push that to in memory queue.
-				contents, err := fileCacheBackend.GetCachedContent(filename)
-				if err == nil {
-					batchID := getBatchID()
-					err = inMemoryBatches.Queue(OutgoingBatch{BatchID: batchID, Values: contents})
-					if err == nil {
-						// Added to in-memory queue -> remove from disk
-						fileCacheBackend.DeleteCacheItem(filename)
-						inMemoryBatchesAvailable <- struct{}{}
-						lastIterationFoundFile = true
-					}
-				}
-			} else {
-				diskHasItems = false
-			}
+		case <-inMemoryBatches.SlotFreedUp:
+			slotFreedUp()
+		case <-ticker.C:
+			slotFreedUp()
 		}
 	}
 }
@@ -641,11 +663,25 @@ func main() {
 	localPortFlag := flag.Int("local-port", 6065, "Port to listen on on localhost")
 	maximumBatchWaitTimeFlag := flag.String("maximum-batch-wait-time", "10s", "Maximum time to wait for a batch to fill")
 	maxBackoffTimeFlag := flag.String("maximum-backoff-time", "60s", "Maximum backoff time on connection errors")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+	memprofile := flag.String("memprofile", "", "write memory profile to file")
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	maximumBatchWaitTime, err := time.ParseDuration(*maximumBatchWaitTimeFlag)
 	if err != nil {
 		log.Fatalf("Invalid maximum-batch-wait-time: %s", err)
+	}
+	if maximumBatchWaitTime < time.Second {
+		log.Fatalf("-maximum-batch-wait-time must be at least 1s")
 	}
 
 	quitChannel := make(chan struct{})
@@ -662,7 +698,8 @@ func main() {
 	incomingChannel := make(chan string, 100)
 	batchChannel := make(chan OutgoingBatch, 100)
 	inMemoryBatchesAvailable := make(chan struct{}, *inMemoryBatchCountFlag+5)
-	var inMemoryBatches InMemoryBatches
+	inMemorySlotAvailable := make(chan struct{}, 100)
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: inMemorySlotAvailable}
 	var sender Sender
 	switch *protocolFlag {
 	case "https":
@@ -674,6 +711,8 @@ func main() {
 		if *pathFlag != "" {
 			log.Fatal("path is not a valid argument for protocol TCP")
 		}
+	case "dummy":
+		sender = &DummySender{}
 	default:
 		log.Fatalf("Invalid protocol: %s", *protocolFlag)
 	}
@@ -709,4 +748,17 @@ func main() {
 	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	go batchProcessor(batchChannel, &inMemoryBatches, fileCacheBackend, inMemoryBatchesAvailable, quitChannel)
 	wg.Wait()
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		log.Print("Memory profile requested; running GC")
+		runtime.GC() // get up-to-date statistics
+		log.Print("GC done")
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }

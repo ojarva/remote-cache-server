@@ -14,7 +14,8 @@ import (
 )
 
 func TestInMemoryBatchesSize(t *testing.T) {
-	imb := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	imb := InMemoryBatches{SlotFreedUp: c}
 	imb.SetBatchCount(5)
 	var err error
 	for i := 0; i < 5; i++ {
@@ -38,7 +39,8 @@ func TestInMemoryBatchesSize(t *testing.T) {
 }
 
 func TestInMemoryBatchesDequeue(t *testing.T) {
-	imb := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	imb := InMemoryBatches{SlotFreedUp: c}
 	imb.SetBatchCount(5)
 	var err error
 	for i := 0; i < 5; i++ {
@@ -67,7 +69,8 @@ func TestInMemoryBatchesDequeue(t *testing.T) {
 }
 
 func TestInMemoryBatchesInflight(t *testing.T) {
-	imb := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	imb := InMemoryBatches{SlotFreedUp: c}
 	imb.SetBatchCount(5)
 	var err error
 	for i := 0; i < 5; i++ {
@@ -191,7 +194,8 @@ func (fs *FakeSender) Send(remoteServerSettings RemoteServerSettings, batch Outg
 }
 
 func TestSendBatch(t *testing.T) {
-	inMemoryBatches := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: c}
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
@@ -216,7 +220,8 @@ func TestSendBatch(t *testing.T) {
 }
 
 func TestSendBatchFailingSend(t *testing.T) {
-	inMemoryBatches := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: c}
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches, Fail: true}}
@@ -235,7 +240,8 @@ func TestSendBatchFailingSend(t *testing.T) {
 }
 
 func TestSendBatchNoItems(t *testing.T) {
-	inMemoryBatches := InMemoryBatches{}
+	c := make(chan struct{}, 100)
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: c}
 	inMemoryBatches.SetBatchCount(5)
 	sentBatches := make(chan OutgoingBatch, 1)
 	remoteServerSettings := RemoteServerSettings{Hostname: "testhost", Sender: &FakeSender{SentBatches: sentBatches}}
