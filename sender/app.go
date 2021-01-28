@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -641,7 +643,18 @@ func main() {
 	localPortFlag := flag.Int("local-port", 6065, "Port to listen on on localhost")
 	maximumBatchWaitTimeFlag := flag.String("maximum-batch-wait-time", "10s", "Maximum time to wait for a batch to fill")
 	maxBackoffTimeFlag := flag.String("maximum-backoff-time", "60s", "Maximum backoff time on connection errors")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+	memprofile := flag.String("memprofile", "", "write memory profile to file")
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	maximumBatchWaitTime, err := time.ParseDuration(*maximumBatchWaitTimeFlag)
 	if err != nil {
@@ -709,4 +722,17 @@ func main() {
 	go sendBatch(&inMemoryBatches, inMemoryBatchesAvailable, remoteServerSettings)
 	go batchProcessor(batchChannel, &inMemoryBatches, fileCacheBackend, inMemoryBatchesAvailable, quitChannel)
 	wg.Wait()
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		log.Print("Memory profile requested; running GC")
+		runtime.GC() // get up-to-date statistics
+		log.Print("GC done")
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }
