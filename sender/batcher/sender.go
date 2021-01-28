@@ -9,6 +9,7 @@ import (
 	"github.com/ojarva/remote-cache-server/utils"
 )
 
+// Send processes pending batches and tries to send those using sender specified in RemoteServerSettings.
 func Send(inMemoryBatches *types.InMemoryBatches, inMemoryBatchesAvailable chan struct{}, remoteServerSettings senders.RemoteServerSettings) {
 	var status bool
 	backoffUntil := time.Now()

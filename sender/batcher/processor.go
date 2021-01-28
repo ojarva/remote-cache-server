@@ -8,6 +8,7 @@ import (
 	"github.com/ojarva/remote-cache-server/types"
 )
 
+// Processor processes incoming batches, either storing those in InMemoryBatches (if there's room) or to FileCacheBackend. If there's any room in InMemoryBatches, data from files stored by FileCacheBackend are preferred to avoid starvation.
 func Processor(batchChannel chan types.OutgoingBatch, inMemoryBatches *types.InMemoryBatches, fileCacheBackend *backends.FileCacheBackend, inMemoryBatchesAvailable chan struct{}, quitChannel chan struct{}) {
 	var diskHasItems bool
 	var err error

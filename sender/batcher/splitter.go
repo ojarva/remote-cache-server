@@ -8,6 +8,7 @@ import (
 	"github.com/ojarva/remote-cache-server/types"
 )
 
+// BatchIncomingDataPoints reads incomingChannel and creates batches with preconfigured size (or time interval).
 func BatchIncomingDataPoints(incomingChannel chan string, outgoingChannel chan types.OutgoingBatch, batchSize int, quitChannel chan struct{}, maximumBatchWaitTime time.Duration, wg *sync.WaitGroup) {
 	var localItems []string
 	var item string

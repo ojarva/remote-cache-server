@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -32,4 +33,22 @@ func TestBackoffService(t *testing.T) {
 	if waitTime != 0*time.Second {
 		t.Errorf("Invalid wait time after successful request: %s", waitTime)
 	}
+}
+
+func ExampleBackoffService() {
+	backoff := BackoffService(10 * time.Second)
+	fmt.Println(backoff(false))
+	fmt.Println(backoff(false))
+	fmt.Println(backoff(false))
+	fmt.Println(backoff(false))
+	fmt.Println(backoff(true))
+	fmt.Println(backoff(true))
+	fmt.Println(backoff(false))
+	// Output: 2s
+	// 4s
+	// 8s
+	// 10s
+	// 0s
+	// 0s
+	// 2s
 }

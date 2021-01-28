@@ -23,6 +23,24 @@ func ExampleInMemoryBatches() {
 	// batch1
 }
 
+func ExampleInMemoryBatches_InflightDone() {
+	inMemoryBatches := InMemoryBatches{SlotFreedUp: make(chan struct{}, 100)}
+	inMemoryBatches.SetBatchCount(2)
+	inMemoryBatches.Queue(OutgoingBatch{BatchID: "batch1"})
+	inMemoryBatches.Queue(OutgoingBatch{BatchID: "batch2"})
+	batch, _ := inMemoryBatches.GetInflight()
+	fmt.Println(batch.BatchID)
+	inMemoryBatches.InflightDone(false)
+	batch, _ = inMemoryBatches.GetInflight()
+	fmt.Println(batch.BatchID)
+	inMemoryBatches.InflightDone(true)
+	batch, _ = inMemoryBatches.GetInflight()
+	fmt.Println(batch.BatchID)
+	// Output: batch1
+	// batch1
+	// batch2
+}
+
 func TestInMemoryBatchesInflight(t *testing.T) {
 	c := make(chan struct{}, 100)
 	imb := InMemoryBatches{SlotFreedUp: c}

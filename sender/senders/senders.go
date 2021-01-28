@@ -29,19 +29,26 @@ func (rss RemoteServerSettings) Send(batch types.OutgoingBatch) error {
 	return rss.Sender.Send(rss, batch)
 }
 
+func (rss RemoteServerSettings) cleanPath() string {
+	return strings.TrimLeft(rss.Path, "/")
+}
+
 // String returns a safe string representation without a password
 func (rss RemoteServerSettings) String() string {
-	return fmt.Sprintf("%s:%d/%s - %s", rss.Hostname, rss.Port, rss.Path, rss.Username)
+	path := rss.cleanPath()
+	return fmt.Sprintf("%s:%d/%s - %s", rss.Hostname, rss.Port, path, rss.Username)
 }
 
 // GenerateHTTPURL returns URL to the endpoint
 func (rss RemoteServerSettings) GenerateHTTPURL() string {
-	return fmt.Sprintf("http://%s:%d/%s", rss.Hostname, rss.Port, rss.Path)
+	path := rss.cleanPath()
+	return fmt.Sprintf("http://%s:%d/%s", rss.Hostname, rss.Port, path)
 }
 
 // GenerateHTTPSURL returns URL to the endpoint
 func (rss RemoteServerSettings) GenerateHTTPSURL() string {
-	return fmt.Sprintf("https://%s:%d/%s", rss.Hostname, rss.Port, rss.Path)
+	path := rss.cleanPath()
+	return fmt.Sprintf("https://%s:%d/%s", rss.Hostname, rss.Port, path)
 }
 
 // GenerateTCP generates connection string for TCP
@@ -125,16 +132,14 @@ func (ts *TCPSender) Send(remoteServerSettings RemoteServerSettings, batch types
 	if ts.conn == nil {
 		// We don't have a connection, try opening one
 		hostPort := remoteServerSettings.GenerateTCP()
-		addr, err := net.ResolveTCPAddr("tcp", hostPort)
-		if err != nil {
-			return fmt.Errorf("Unable to resolve %s: %s", hostPort, err)
-		}
-		conn, err := net.DialTCP("tcp", nil, addr)
+		dialer := net.Dialer{Timeout: 5 * time.Second}
+		conn, err := dialer.Dial("tcp", hostPort)
 		if err != nil {
 			return fmt.Errorf("Unable to open TCP connection: %s: %s", hostPort, err)
 		}
-		(*ts).conn = conn
+		(*ts).conn = conn.(*net.TCPConn)
 	}
+	ts.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, err := ts.conn.Write([]byte(strings.Join(batch.Values, "\n")))
 	if err != nil {
 		ts.conn.Close()
