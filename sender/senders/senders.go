@@ -129,6 +129,7 @@ func (ts *TCPSender) Init() error {
 
 // Send sends the data to remote server
 func (ts *TCPSender) Send(remoteServerSettings RemoteServerSettings, batch types.OutgoingBatch) error {
+	var err error
 	if ts.conn == nil {
 		// We don't have a connection, try opening one
 		hostPort := remoteServerSettings.GenerateTCP()
@@ -140,7 +141,10 @@ func (ts *TCPSender) Send(remoteServerSettings RemoteServerSettings, batch types
 		(*ts).conn = conn.(*net.TCPConn)
 	}
 	ts.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, err := ts.conn.Write([]byte(strings.Join(batch.Values, "\n")))
+	_, err = ts.conn.Write([]byte(strings.Join(batch.Values, "\n")))
+	if err == nil {
+		_, err = ts.conn.Write([]byte("\n"))
+	}
 	if err != nil {
 		ts.conn.Close()
 		ts.conn = nil
