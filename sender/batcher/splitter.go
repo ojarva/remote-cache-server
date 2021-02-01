@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 // BatchIncomingDataPoints reads incomingChannel and creates batches with preconfigured size (or time interval).

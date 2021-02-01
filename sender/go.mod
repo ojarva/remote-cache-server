@@ -1,4 +1,4 @@
-module github.com/ojarva/remote-cache-server
+module github.com/ojarva/remote-cache-server/sender
 
 go 1.15
 

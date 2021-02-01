@@ -1,3 +1,4 @@
-sender/remote-cache-server
+sender/sender
 sender/cache-dir
+receiver/receiver
 *.pprof

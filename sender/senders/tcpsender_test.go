@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/senders"
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/senders"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 func Example() {

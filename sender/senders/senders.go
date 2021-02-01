@@ -9,7 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/types"
+)
+
+type SenderType int
+
+const (
+	HTTP SenderType = iota
+	TCP
+	Dummy
 )
 
 // RemoteServerSettings holds details for a remote server
