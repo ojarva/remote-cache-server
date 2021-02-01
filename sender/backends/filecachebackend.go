@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 // FileCacheBackend is a basic backend for storing overflow data in the filesystem, inside a single folder.

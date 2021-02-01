@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/senders"
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/senders"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 type FakeSender struct {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 func TestBatchIncomingDataPoints(t *testing.T) {

@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/senders"
-	"github.com/ojarva/remote-cache-server/types"
-	"github.com/ojarva/remote-cache-server/utils"
+	"github.com/ojarva/remote-cache-server/sender/senders"
+	"github.com/ojarva/remote-cache-server/sender/types"
+	"github.com/ojarva/remote-cache-server/sender/utils"
 )
 
 // Send processes pending batches and tries to send those using sender specified in RemoteServerSettings.

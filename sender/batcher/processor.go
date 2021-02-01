@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/ojarva/remote-cache-server/backends"
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/backends"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 // Processor processes incoming batches, either storing those in InMemoryBatches (if there's room) or to FileCacheBackend. If there's any room in InMemoryBatches, data from files stored by FileCacheBackend are preferred to avoid starvation.

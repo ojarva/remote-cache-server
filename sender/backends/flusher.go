@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/ojarva/remote-cache-server/types"
+	"github.com/ojarva/remote-cache-server/sender/types"
 )
 
 func FlushInMemoryToDisk(inMemoryBatches *types.InMemoryBatches, quitChannel chan struct{}, fileCacheBackend *FileCacheBackend, wg *sync.WaitGroup) {
